@@ -270,38 +270,82 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     is_karaoke = preset.get("karaoke", False)
     uppercase = preset.get("uppercase", True)
     
+    def color_to_ass_tag(hex_color: str) -> str:
+        c = hex_color.lstrip("#")
+        if len(c) == 6:
+            r, g, b = c[0:2], c[2:4], c[4:6]
+            return f"&H{b}{g}{r}&"
+        return "&HFFFFFF&"
+        
+    tag_primary = color_to_ass_tag(preset.get("primary_color", "#FFFFFF"))
+    tag_highlight = color_to_ass_tag(preset.get("highlight_color", "#FFD400"))
+
     groups = []
-    curr_group = []
-    curr_len = 0
-    
-    for w in words:
-        text = w["word"].upper() if uppercase else w["word"]
-        w_item = {**w, "text": text}
-        if curr_group and (curr_len + len(text) > max_chars):
+    if animation == "one_word":
+        for w in words:
+            text = w["word"].upper() if uppercase else w["word"]
+            groups.append([{**w, "text": text}])
+    else:
+        curr_group = []
+        curr_len = 0
+        for w in words:
+            text = w["word"].upper() if uppercase else w["word"]
+            w_item = {**w, "text": text}
+            if curr_group and (curr_len + len(text) > max_chars):
+                groups.append(curr_group)
+                curr_group = [w_item]
+                curr_len = len(text)
+            else:
+                curr_group.append(w_item)
+                curr_len += len(text) + 1
+        if curr_group:
             groups.append(curr_group)
-            curr_group = [w_item]
-            curr_len = len(text)
-        else:
-            curr_group.append(w_item)
-            curr_len += len(text) + 1
-    if curr_group:
-        groups.append(curr_group)
         
     for grp in groups:
-        start_t = format_ass_time(grp[0]["start"])
-        end_t = format_ass_time(grp[-1]["end"])
-        
-        if is_karaoke or animation == "highlight":
-            line_parts = []
-            for item in grp:
-                dur_cs = int(round((item["end"] - item["start"]) * 100))
-                dur_cs = max(1, dur_cs)
-                line_parts.append(f"{{\\k{dur_cs}}}{item['text']}")
-            text_str = " ".join(line_parts)
+        if animation == "one_word":
+            start_t = format_ass_time(grp[0]["start"])
+            end_t = format_ass_time(grp[0]["end"])
+            text_str = grp[0]["text"]
+            events.append(f"Dialogue: 0,{start_t},{end_t},Default,,0,0,0,,{text_str}")
+        elif animation == "highlight":
+            for i, active_item in enumerate(grp):
+                start_t = format_ass_time(active_item["start"])
+                if i < len(grp) - 1:
+                    end_t = format_ass_time(grp[i+1]["start"])
+                else:
+                    end_t = format_ass_time(active_item["end"])
+                    
+                line_parts = []
+                for item in grp:
+                    if item == active_item:
+                        line_parts.append(f"{{\\c{tag_highlight}}}{item['text']}{{\\c{tag_primary}}}")
+                    else:
+                        line_parts.append(item['text'])
+                text_str = " ".join(line_parts)
+                events.append(f"Dialogue: 0,{start_t},{end_t},Default,,0,0,0,,{text_str}")
+        elif animation == "word_reveal":
+            for i, active_item in enumerate(grp):
+                start_t = format_ass_time(active_item["start"])
+                if i < len(grp) - 1:
+                    end_t = format_ass_time(grp[i+1]["start"])
+                else:
+                    end_t = format_ass_time(active_item["end"])
+                    
+                text_str = " ".join(grp[j]["text"] for j in range(i+1))
+                events.append(f"Dialogue: 0,{start_t},{end_t},Default,,0,0,0,,{text_str}")
         else:
-            text_str = " ".join(item["text"] for item in grp)
-            
-        events.append(f"Dialogue: 0,{start_t},{end_t},Default,,0,0,0,,{text_str}")
+            start_t = format_ass_time(grp[0]["start"])
+            end_t = format_ass_time(grp[-1]["end"])
+            if is_karaoke:
+                line_parts = []
+                for item in grp:
+                    dur_cs = int(round((item["end"] - item["start"]) * 100))
+                    dur_cs = max(1, dur_cs)
+                    line_parts.append(f"{{\\k{dur_cs}}}{item['text']}")
+                text_str = " ".join(line_parts)
+            else:
+                text_str = " ".join(item["text"] for item in grp)
+            events.append(f"Dialogue: 0,{start_t},{end_t},Default,,0,0,0,,{text_str}")
 
     full_content = header + "\n".join(events)
     output_path.write_text(full_content, encoding="utf-8")
@@ -455,6 +499,26 @@ def download_video_url(
         "nocheckcertificate": True,
     }
 
+    # Auto-detect cookies.txt from workspace locations
+    cookie_paths = [
+        Path("cookies.txt"),
+        Path("../cookies.txt"),
+        Path("/content/cookies.txt"),
+        Path("/content/Clipper-IO/cookies.txt")
+    ]
+    detected_cookies = None
+    if cookies_file and os.path.exists(cookies_file):
+        detected_cookies = cookies_file
+    else:
+        for p in cookie_paths:
+            if p.exists() and p.is_file() and p.stat().st_size > 0:
+                detected_cookies = str(p)
+                break
+                
+    if detected_cookies:
+        base_opts["cookiefile"] = detected_cookies
+        logger.info(f"🍪 Auto-detected cookies.txt at: {detected_cookies}. Adding to yt-dlp.")
+
     # Extract video title first
     title = "Video"
     try:
@@ -492,8 +556,9 @@ def download_video_url(
             msg += f"\nReason: {last_reason}"
         if _is_auth_error(last_reason):
             msg += (
-                "\n\nThis video requires YouTube authentication or a bot/sign-in verification, "
-                "which is not supported by the cookie-free downloader."
+                "\n\nYouTube is requiring verification for this video.\n"
+                "Try another public video or provide an authorized source supported by the downloader.\n"
+                "Tip: You can upload your own 'cookies.txt' to the workspace root to authenticate."
             )
         raise InvalidVideoURLError(msg) from last_exc
 
@@ -719,21 +784,25 @@ def render_clip(
         if target_h % 2 != 0:
             target_h -= 1
 
+    rel_ass_path = os.path.relpath(ass_path, start=Path.cwd()).replace("\\", "/")
+    rel_fonts_dir = os.path.relpath(FONTS_DIR, start=Path.cwd()).replace("\\", "/")
+
     if fit_mode == FitMode.SQUARE:
         sq_size = min(target_w, target_h)
         mask_path = ensure_rounded_mask(sq_size, int(sq_size * 0.06))
+        rel_mask_path = os.path.relpath(mask_path, start=Path.cwd()).replace("\\", "/")
         filtergraph = (
             f"[0:v]scale={sq_size}:{sq_size}:force_original_aspect_ratio=increase:flags=lanczos,crop={sq_size}:{sq_size}[fg];"
-            f"movie='{mask_path}'[mask];"
+            f"movie='{rel_mask_path}'[mask];"
             f"[fg][mask]alphamerge[rounded];"
             f"color=c=black:s={target_w}x{target_h}:d={clip_dur}[bg];"
             f"[bg][rounded]overlay=(W-w)/2:(H-h)/2[base];"
-            f"[base]ass='{ass_path}':fontsdir='{FONTS_DIR}'[outv]"
+            f"[base]ass='{rel_ass_path}':fontsdir='{rel_fonts_dir}'[outv]"
         )
     else:
         filtergraph = (
             f"[0:v]scale={target_w}:{target_h}:force_original_aspect_ratio=increase:flags=lanczos,crop={target_w}:{target_h},"
-            f"ass='{ass_path}':fontsdir='{FONTS_DIR}'[outv]"
+            f"ass='{rel_ass_path}':fontsdir='{rel_fonts_dir}'[outv]"
         )
 
     stream_mapping = ["[outv]", "0:a?"]
@@ -821,7 +890,7 @@ def process_video_pipeline(
         source_path, source_title = download_video_url(
             url=video_url.strip(), 
             output_dir=DOWNLOADS_DIR, 
-            cookies_file=None
+            cookies_file=cookies_file
         )
     else:
         raise ValueError("Please provide either a valid YouTube URL or upload a video file.")

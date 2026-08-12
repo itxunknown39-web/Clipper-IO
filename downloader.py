@@ -180,6 +180,24 @@ def download_video(
         "continuedl": True,
         "nocheckcertificate": True,
     }
+
+    # Auto-detect cookies.txt from workspace locations
+    cookie_paths = [
+        Path("cookies.txt"),
+        Path("../cookies.txt"),
+        Path("/content/cookies.txt"),
+        Path("/content/Clipper-IO/cookies.txt")
+    ]
+    detected_cookies = None
+    for p in cookie_paths:
+        if p.exists() and p.is_file() and p.stat().st_size > 0:
+            detected_cookies = str(p)
+            break
+                
+    if detected_cookies:
+        base_opts["cookiefile"] = detected_cookies
+        logger.info(f"🍪 Auto-detected cookies.txt at: {detected_cookies}. Adding to yt-dlp.")
+
     if progress_hook is not None:
         base_opts["progress_hooks"] = [progress_hook]
 
@@ -211,8 +229,9 @@ def download_video(
             msg += f"\nReason: {last_reason}"
         if _is_auth_error(last_reason):
             msg += (
-                "\n\nThis video requires YouTube authentication or a bot/sign-in verification, "
-                "which is not supported by the cookie-free downloader."
+                "\n\nYouTube is requiring verification for this video.\n"
+                "Try another public video or provide an authorized source supported by the downloader.\n"
+                "Tip: You can upload your own 'cookies.txt' to the workspace root to authenticate."
             )
         raise InvalidVideoURLError(msg) from last_exc
 
