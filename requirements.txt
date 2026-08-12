@@ -1,7 +1,6 @@
 yt-dlp
 faster-whisper
 indic-transliteration
-gradio
 requests
 pydantic>=2.0
 fastapi
