@@ -188,15 +188,26 @@ def apply_routes_to_app(app: FastAPI):
     app.add_api_route("/api/generate", generate_clips, methods=["POST"])
     app.add_api_route("/api/status/{job_id}", get_status, methods=["GET"])
     
-    # Override root "/" route to serve custom premium index.html.
+    # Override root "/" route to serve portfolio.html.
     def home_endpoint():
+        index_path = Path("frontend/portfolio.html")
+        if index_path.exists():
+            with open(index_path, "r", encoding="utf-8") as f:
+                return HTMLResponse(f.read())
+        else:
+            return HTMLResponse("<h2>Error: frontend/portfolio.html not found.</h2>")
+            
+    route = APIRoute("/", home_endpoint, methods=["GET"])
+    app.routes.insert(0, route)
+
+    # Add route for the original Clipper-IO app.
+    def clipper_endpoint():
         index_path = Path("frontend/index.html")
         if index_path.exists():
             with open(index_path, "r", encoding="utf-8") as f:
                 return HTMLResponse(f.read())
         else:
             return HTMLResponse("<h2>Error: frontend/index.html not found.</h2>")
-            
-    route = APIRoute("/", home_endpoint, methods=["GET"])
-    app.routes.insert(0, route)
+
+    app.add_api_route("/clipper", clipper_endpoint, methods=["GET"])
     print("🚀 Custom routes injected into Gradio FastAPI application server!")
